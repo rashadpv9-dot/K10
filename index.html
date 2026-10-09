@@ -69,7 +69,7 @@
     </div>
   </header>
 
-  <div class="drawer" id="drawer">
+  <div class="drawer" id="drawer" data-lenis-prevent>
     <a href="menu.html">Menu</a>
     <a href="#events">Events</a>
     <a href="#private">Private dining</a>
@@ -313,7 +313,7 @@
           <div class="field -full"><label for="r-guests">Guests</label>
             <select id="r-guests" name="guests"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9+</option></select>
           </div>
-          <div class="field -full"><label for="r-notes">Anything we should know?</label><textarea id="r-notes" name="notes" rows="3"></textarea></div>
+          <div class="field -full"><label for="r-notes">Anything we should know?</label><textarea id="r-notes" name="notes" rows="3" data-lenis-prevent></textarea></div>
           <button class="btn -solid" type="submit">Request a table</button>
           <a class="btn -ghost" href="tel:+97334373567">Or call us</a>
           <p class="form__note">Sending opens an email to our team — we'll confirm your table by phone.</p>
@@ -377,6 +377,9 @@
     </div>
   </footer>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.14/dist/lenis.min.js" defer></script>
   <script src="assets/js/main.js" defer></script>
 </body>
 </html>

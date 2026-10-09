@@ -1,10 +1,17 @@
-// Kingston 10 — site interactions (no dependencies)
+// Kingston 10 — site interactions
+// Motion runs on GSAP + ScrollTrigger, with Lenis for smooth scrolling
+// (all three are loaded from CDNs before this file).
+// Without GSAP, or with reduced motion on, the site falls back to a static layout.
 (() => {
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const root = document.documentElement;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motion = Boolean(window.gsap && window.ScrollTrigger) && !reduceMotion;
+  const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+  let lenis = null; // smooth-scroll instance, created in initMotion()
 
-  document.documentElement.classList.remove("no-js");
+  root.classList.remove("no-js");
 
   // Open daily 12:00 → 02:00 (next day). Edit here if hours change.
   const OPEN_HOUR = 12;
@@ -33,6 +40,14 @@
       burger.setAttribute("aria-expanded", String(open));
       drawer.classList.toggle("is-open", open);
       document.body.style.overflow = open ? "hidden" : "";
+      if (lenis) open ? lenis.stop() : lenis.start();
+      if (open && motion) {
+        gsap.fromTo(
+          drawer.children,
+          { y: 36, opacity: 0 },
+          { y: 0, opacity: 1, duration: 0.7, ease: "power3.out", stagger: 0.06, delay: 0.2, overwrite: true }
+        );
+      }
     };
     burger.addEventListener("click", () => setOpen(burger.getAttribute("aria-expanded") !== "true"));
     drawer.addEventListener("click", (e) => e.target.closest("a") && setOpen(false));
@@ -47,93 +62,19 @@
     track.appendChild(clone);
   }
 
-  /* Reveal on scroll */
-  const reveals = $$(".reveal");
-  if ("IntersectionObserver" in window && !reduceMotion) {
-    const io = new IntersectionObserver(
-      (entries) =>
-        entries.forEach((e) => {
-          if (!e.isIntersecting) return;
-          e.target.classList.add("is-in");
-          io.unobserve(e.target);
-        }),
-      { threshold: 0.15, rootMargin: "0px 0px -8% 0px" }
-    );
-    reveals.forEach((el) => io.observe(el));
-  } else {
-    reveals.forEach((el) => el.classList.add("is-in"));
-  }
-
-  /* Dish carousel.
-     Wide screens: scroll-driven — the section pins, vertical scroll moves the rail
-     sideways, the centred plate scales up and the background changes per dish.
-     Small screens / reduced motion: plain swipeable scroll-snap rail. */
+  /* Dish carousel — shared refs. `pinned` is set while the GSAP pin is active. */
   const rail = $(".plates__rail");
+  const plates = rail ? $$(".plate", rail) : [];
+  let pinned = null;
   if (rail) {
-    const section = rail.closest(".plates");
-    const pin = $(".plates__pin", section);
-    const plates = $$(".plate", rail);
-    const count = $("[data-plates-count]", section);
-    const bar = $("[data-plates-bar]", section);
-    const wide = matchMedia("(min-width: 901px) and (min-height: 620px)");
-    const last = plates.length - 1;
-    const colors = plates.map((p) => (p.dataset.bg || "#15110d").match(/\w\w/g).map((h) => parseInt(h, 16)));
-    const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
-    let pinned = false;
-    let travel = 0;
-    let ticking = false;
-
-    const stepScroll = () => (section.offsetHeight - innerHeight) / last;
-
-    const update = () => {
-      ticking = false;
-      if (!pinned) return;
-      const p = clamp(-section.getBoundingClientRect().top / (section.offsetHeight - innerHeight), 0, 1);
-      const pos = p * last;
-      rail.style.transform = `translate3d(${-p * travel}px,0,0)`;
-
-      const i = Math.min(Math.floor(pos), last - 1);
-      const t = pos - i;
-      const mix = colors[i].map((c, k) => Math.round(c + (colors[i + 1][k] - c) * t));
-      section.style.backgroundColor = `rgb(${mix.join(" ")})`;
-
-      plates.forEach((plate, n) => {
-        const d = n - pos;
-        const near = Math.min(Math.abs(d), 1);
-        plate.style.transform = `scale(${1 - near * 0.24})`;
-        plate.style.opacity = 1 - Math.min(Math.abs(d), 1.6) * 0.38;
-        plate.firstElementChild.firstElementChild.style.transform = `rotate(${d * 38}deg)`;
-      });
-      if (count) count.textContent = `0${Math.round(pos) + 1} / 0${plates.length}`;
-      if (bar) bar.style.transform = `scaleX(${p})`;
-    };
-
-    const measure = () => {
-      pinned = wide.matches && !reduceMotion && last > 0;
-      section.classList.toggle("is-pinned", pinned);
-      if (!pinned) {
-        section.style.removeProperty("background-color");
-        rail.style.removeProperty("transform");
-        plates.forEach((plate) => {
-          plate.removeAttribute("style");
-          plate.firstElementChild.firstElementChild.removeAttribute("style");
-        });
-        return;
-      }
-      const w = plates[0].offsetWidth;
-      travel = (w + parseFloat(getComputedStyle(rail).columnGap)) * last;
-      section.style.setProperty("--travel", `${travel}px`);
-      section.style.setProperty("--pad", `${(pin.clientWidth - w) / 2}px`);
-      update();
-    };
-
-    addEventListener("scroll", () => !ticking && (ticking = true) && requestAnimationFrame(update), { passive: true });
-    addEventListener("resize", measure);
-    addEventListener("load", measure);
-    measure();
-
     const go = (dir) => {
-      if (pinned) return scrollBy({ top: dir * stepScroll(), behavior: "smooth" });
+      if (pinned) {
+        const { st, state } = pinned;
+        const last = plates.length - 1;
+        const i = clamp(Math.round(state.p * last) + dir, 0, last);
+        const top = st.start + (i / last) * (st.end - st.start);
+        return lenis ? lenis.scrollTo(top, { duration: 1.1 }) : scrollTo({ top, behavior: "smooth" });
+      }
       const step = plates[0].getBoundingClientRect().width + 32;
       rail.scrollBy({ left: dir * step, behavior: "smooth" });
     };
@@ -141,24 +82,218 @@
     $("[data-plates-next]")?.addEventListener("click", () => go(1));
   }
 
-  /* Count-up numbers */
-  const counters = $$("[data-count]");
-  if (counters.length && "IntersectionObserver" in window && !reduceMotion) {
-    const io = new IntersectionObserver((entries) =>
-      entries.forEach((e) => {
-        if (!e.isIntersecting) return;
-        io.unobserve(e.target);
-        const end = Number(e.target.dataset.count);
-        const t0 = performance.now();
-        const tick = (t) => {
-          const p = Math.min((t - t0) / 1400, 1);
-          e.target.textContent = Math.round(end * (1 - Math.pow(1 - p, 3)));
-          if (p < 1) requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      })
+  if (motion) initMotion();
+  else $$(".reveal").forEach((el) => el.classList.add("is-in"));
+
+  function initMotion() {
+    gsap.registerPlugin(ScrollTrigger);
+    gsap.defaults({ ease: "power3.out", duration: 1 });
+    root.classList.add("gsap-on");
+    const mm = gsap.matchMedia();
+
+    // Lenis eases wheel/keyboard scrolling and is driven by GSAP's ticker so that
+    // ScrollTrigger and the smooth scroll stay on the same frame.
+    if (window.Lenis) {
+      lenis = new Lenis({ lerp: 0.09 });
+      lenis.on("scroll", ScrollTrigger.update);
+      gsap.ticker.add((time) => lenis.raf(time * 1000));
+      gsap.ticker.lagSmoothing(0);
+    }
+
+    // CSS smooth scrolling fights ScrollTrigger, so in-page links are scrolled here instead.
+    document.addEventListener("click", (e) => {
+      const link = e.target.closest('a[href^="#"]');
+      const target = link && link.hash.length > 1 && $(link.hash);
+      if (!target) return;
+      e.preventDefault();
+      if (lenis) lenis.scrollTo(target, { duration: 1.4 });
+      else target.scrollIntoView({ behavior: "smooth" });
+      history.pushState(null, "", link.hash);
+    });
+
+    /* ---- Hero: intro timeline, idle loops, scroll parallax ---- */
+    if ($(".hero")) {
+      gsap
+        .timeline({ defaults: { ease: "power4.out" } })
+        .from(".header", { yPercent: -100, duration: 0.8, clearProps: "transform" })
+        .from(".hero__title span", { yPercent: 70, opacity: 0, rotate: 4, transformOrigin: "0% 100%", duration: 1.1, stagger: 0.12 }, 0.1)
+        .from(".hero__copy > *", { y: 30, opacity: 0, duration: 0.9, stagger: 0.1 }, 0.5)
+        .from(".hero__blob", { scale: 0.5, opacity: 0, rotate: -20, duration: 1.4, ease: "expo.out" }, 0.2)
+        .from(".hero__bowl", { xPercent: -60, yPercent: 40, opacity: 0, rotate: -30, duration: 1.3, ease: "back.out(1.4)" }, 0.6)
+        .from(".hero__stamp", { scale: 0, opacity: 0, duration: 0.9, ease: "back.out(2)" }, 1)
+        .from(".quick__list li", { y: 40, opacity: 0, duration: 0.8, stagger: 0.08 }, 0.9)
+        .add(() => gsap.to(".hero__bowl", { y: -14, rotate: -2, duration: 3.5, ease: "sine.inOut", yoyo: true, repeat: -1 }));
+
+      gsap.to(".hero__stamp", { rotation: 360, duration: 26, ease: "none", repeat: -1 });
+
+      const heroScrub = { trigger: ".hero", start: "top top", end: "bottom top", scrub: true };
+      gsap.to(".hero__art", { yPercent: -12, ease: "none", scrollTrigger: heroScrub });
+      gsap.to(".hero__title", { yPercent: 18, ease: "none", scrollTrigger: heroScrub });
+      gsap.to(".hero .splash.-one", { yPercent: -35, rotate: 25, ease: "none", scrollTrigger: heroScrub });
+      gsap.to(".hero .splash.-two", { yPercent: -120, ease: "none", scrollTrigger: heroScrub });
+    }
+
+    /* ---- Menu page hero ---- */
+    if ($(".page-hero")) {
+      gsap.from(".page-hero .wrap > *", { y: 40, opacity: 0, duration: 1.1, stagger: 0.12, delay: 0.15 });
+      gsap.to(".page-hero .splash", { yPercent: -40, ease: "none", scrollTrigger: { trigger: ".page-hero", start: "top top", end: "bottom top", scrub: true } });
+    }
+
+    /* ---- Menu intro: floating photos pop in, then drift at different speeds ---- */
+    $$(".orbit").forEach((el, i) => {
+      gsap.fromTo(
+        el,
+        { scale: 0, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 1.1, ease: "back.out(1.6)", delay: i * 0.08, scrollTrigger: { trigger: ".callout", start: "top 75%", once: true } }
+      );
+      gsap.to(el, { yPercent: [-40, 30, -25, 45][i % 4], ease: "none", scrollTrigger: { trigger: ".callout", start: "top bottom", end: "bottom top", scrub: 1 } });
+    });
+    $$(".callout .splash").forEach((el, i) =>
+      gsap.to(el, { rotate: i ? -70 : 70, scale: 1.25, ease: "none", scrollTrigger: { trigger: ".callout", start: "top bottom", end: "bottom top", scrub: 1 } })
     );
-    counters.forEach((el) => io.observe(el));
+
+    /* ---- Signature dishes: pinned, scrubbed horizontal scroll (wide screens) ---- */
+    if (rail && plates.length > 1) {
+      const section = rail.closest(".plates");
+      const pin = $(".plates__pin", section);
+      const count = $("[data-plates-count]", section);
+      const bar = $("[data-plates-bar]", section);
+      const last = plates.length - 1;
+      const colors = plates.map((p) => (p.dataset.bg || "#15110d").match(/\w\w/g).map((h) => parseInt(h, 16)));
+
+      mm.add("(min-width: 901px) and (min-height: 620px)", () => {
+        section.classList.add("is-pinned");
+        const state = { p: 0 };
+        let travel = 0;
+
+        const layout = () => {
+          const w = plates[0].offsetWidth;
+          travel = (w + parseFloat(getComputedStyle(rail).columnGap)) * last;
+          section.style.setProperty("--pad", `${(pin.clientWidth - w) / 2}px`);
+        };
+
+        const render = () => {
+          const pos = state.p * last;
+          gsap.set(rail, { x: -state.p * travel });
+
+          const i = Math.min(Math.floor(pos), last - 1);
+          const t = pos - i;
+          const mix = colors[i].map((c, k) => Math.round(c + (colors[i + 1][k] - c) * t));
+          section.style.backgroundColor = `rgb(${mix.join(" ")})`;
+
+          plates.forEach((plate, n) => {
+            const d = n - pos;
+            gsap.set(plate, { scale: 1 - Math.min(Math.abs(d), 1) * 0.24, opacity: 1 - Math.min(Math.abs(d), 1.6) * 0.38 });
+            gsap.set(plate.firstElementChild.firstElementChild, { rotation: d * 38 });
+          });
+          if (count) count.textContent = `0${Math.round(pos) + 1} / 0${plates.length}`;
+          if (bar) gsap.set(bar, { scaleX: state.p });
+        };
+
+        layout();
+        const tween = gsap.to(state, {
+          p: 1,
+          ease: "none",
+          onUpdate: render,
+          scrollTrigger: {
+            trigger: section,
+            start: "top top",
+            // About one screen of scrolling per dish, so a fast flick can't skip the section.
+            end: () => `+=${Math.max(travel * 1.3, last * innerHeight)}`,
+            pin: true,
+            scrub: 0.6,
+            anticipatePin: 1,
+            invalidateOnRefresh: true,
+            refreshPriority: 1,
+            onRefreshInit: layout,
+            onRefresh: render,
+          },
+        });
+        render();
+        pinned = { st: tween.scrollTrigger, state };
+
+        gsap.from(".plates__arc", { y: 60, opacity: 0, duration: 1.2, scrollTrigger: { trigger: section, start: "top 70%", once: true } });
+
+        return () => {
+          pinned = null;
+          section.classList.remove("is-pinned");
+          section.style.removeProperty("background-color");
+          section.style.removeProperty("--pad");
+          gsap.set([rail, bar, ...plates, ...plates.map((p) => p.firstElementChild.firstElementChild)], { clearProps: "all" });
+        };
+      });
+    }
+
+    /* ---- Numbers: bubbles spring in, figures count up ---- */
+    if ($(".numbers")) {
+      gsap.fromTo(
+        ".numbers .bubble",
+        { scale: 0, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 1.3, ease: "elastic.out(1, 0.7)", stagger: 0.12, scrollTrigger: { trigger: ".numbers", start: "top 70%", once: true } }
+      );
+    }
+    $$("[data-count]").forEach((el) => {
+      const n = { v: 0 };
+      gsap.to(n, {
+        v: Number(el.dataset.count),
+        duration: 1.8,
+        ease: "power2.out",
+        snap: { v: 1 },
+        onUpdate: () => (el.textContent = n.v),
+        scrollTrigger: { trigger: el, start: "top 85%", once: true },
+      });
+    });
+
+    /* ---- Generic reveals, batched so neighbours stagger ---- */
+    ScrollTrigger.batch(".reveal:not(.bubble):not(.orbit)", {
+      start: "top 88%",
+      once: true,
+      onEnter: (els) => gsap.fromTo(els, { y: 44, opacity: 0 }, { y: 0, opacity: 1, duration: 1, stagger: 0.1, overwrite: true }),
+    });
+
+    /* ---- Image parallax inside masked frames ---- */
+    $$(".arch img, .story__art .-main img").forEach((img) =>
+      gsap.fromTo(
+        img,
+        { yPercent: -8, scale: 1.18 },
+        { yPercent: 8, scale: 1.18, ease: "none", scrollTrigger: { trigger: img.parentElement, start: "top bottom", end: "bottom top", scrub: true } }
+      )
+    );
+    $$(".private .splash, .footer .splash").forEach((el) =>
+      gsap.to(el, { rotate: 60, scale: 1.2, ease: "none", scrollTrigger: { trigger: el.parentElement, start: "top bottom", end: "bottom top", scrub: 1 } })
+    );
+    if ($(".story__art .-inset")) {
+      gsap.to(".story__art .-inset", { yPercent: -30, ease: "none", scrollTrigger: { trigger: ".story__art", start: "top bottom", end: "bottom top", scrub: 1 } });
+    }
+
+    /* ---- Reserve / visit panes slide in from their own sides ---- */
+    if ($(".reserve")) {
+      const st = { trigger: ".reserve", start: "top 72%", once: true };
+      gsap.from(".reserve__pane.-green > *", { x: -50, opacity: 0, stagger: 0.1, scrollTrigger: st });
+      gsap.from(".reserve__pane.-gold > *", { x: 50, opacity: 0, stagger: 0.1, scrollTrigger: st });
+    }
+
+    /* ---- Menu page: dishes and headings ---- */
+    if ($(".dish")) {
+      gsap.set(".dish, .course__head > *", { opacity: 0 });
+      ScrollTrigger.batch(".course__head > *", {
+        start: "top 88%",
+        once: true,
+        onEnter: (els) => gsap.fromTo(els, { y: 30, opacity: 0 }, { y: 0, opacity: 1, stagger: 0.1, overwrite: true }),
+      });
+      ScrollTrigger.batch(".dish", {
+        start: "top 92%",
+        once: true,
+        onEnter: (els) => gsap.fromTo(els, { x: 40, opacity: 0 }, { x: 0, opacity: 1, duration: 0.8, stagger: 0.07, overwrite: true }),
+      });
+    }
+    if ($(".cta-band")) {
+      gsap.from(".cta-band .wrap > *", { y: 40, opacity: 0, stagger: 0.12, scrollTrigger: { trigger: ".cta-band", start: "top 75%", once: true } });
+    }
+
+    /* ---- Footer ---- */
+    gsap.from(".hours", { y: 60, opacity: 0, rotate: -3, duration: 1.1, scrollTrigger: { trigger: ".footer", start: "top 80%", once: true } });
+    gsap.from(".footer__nav a", { x: -30, opacity: 0, stagger: 0.07, scrollTrigger: { trigger: ".footer__nav", start: "top 92%", once: true } });
   }
 
   /* Hours widget (Bahrain time, UTC+3) */
@@ -175,6 +310,7 @@
     const shift = (n) => {
       day = (day + n + 7) % 7;
       render();
+      if (motion) gsap.fromTo($("[data-hours-day]", hours), { x: n * 24, opacity: 0 }, { x: 0, opacity: 1, duration: 0.45 });
     };
     $("[data-hours-prev]", hours).addEventListener("click", () => shift(-1));
     $("[data-hours-next]", hours).addEventListener("click", () => shift(1));
