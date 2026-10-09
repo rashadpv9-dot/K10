@@ -1,6 +1,9 @@
 .claude/
 node_modules/
+.next/
 .DS_Store
 Thumbs.db
+*.tsbuildinfo
+.env*.local
 
 .vercel

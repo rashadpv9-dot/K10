@@ -13,8 +13,8 @@
   --cream: #fbf1dc;
   --cream-200: #f3e3c2;
 
-  --font-display: "Fraunces", "Georgia", serif;
-  --font-body: "Outfit", system-ui, sans-serif;
+  --font-display: var(--font-fraunces), "Georgia", serif;
+  --font-body: var(--font-outfit), system-ui, sans-serif;
 
   --step--1: clamp(0.72rem, 0.7rem + 0.1vw, 0.8rem);
   --step-0: clamp(1rem, 0.96rem + 0.2vw, 1.125rem);
@@ -62,6 +62,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: var(--gold-500); color: var(--ink); padding: 0.75rem 1rem; border-radius: 8px;
 }
 .skip:focus { top: 1rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ---------- Type ---------- */
 .display {
