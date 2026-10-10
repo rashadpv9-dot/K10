@@ -1,7 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, Outfit } from "next/font/google";
-import { Footer, Ticker } from "@/components/Chrome";
-import { SiteMotion } from "@/components/SiteMotion";
 import { LOGO, site } from "@/lib/site";
 import "./globals.css";
 
@@ -41,15 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.remove('no-js')" }} />
       </head>
-      <body>
-        <a className="skip" href="#main">
-          Skip to content
-        </a>
-        <Ticker />
-        {children}
-        <Footer />
-        <SiteMotion />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

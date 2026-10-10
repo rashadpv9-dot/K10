@@ -31,6 +31,12 @@ const SUPABASE_STUB = `
     as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   grant usage on schema public, auth, extensions to anon, authenticated;
   grant execute on function auth.uid() to anon, authenticated;
+  create schema storage;
+  create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+  create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
+  alter table storage.objects enable row level security;
+  grant usage on schema storage to anon, authenticated;
+  grant select, insert, update, delete on storage.objects to authenticated;
   set search_path to public, extensions;
 `;
 
@@ -55,6 +61,8 @@ beforeAll(async () => {
   db = new PGlite({ extensions: { btree_gist } });
   await db.exec(SUPABASE_STUB);
   await db.exec(sql("migrations/0001_booking_core.sql"));
+  await db.exec(sql("migrations/0002_floor_plan_storage.sql"));
+  await db.exec(sql("migrations/0003_private_helpers.sql"));
   await db.exec(sql("seed.sql"));
 
   for (const id of Object.values(USERS)) await db.query("insert into auth.users (id) values ($1)", [id]);
@@ -210,5 +218,41 @@ describe("access control", () => {
       db.query("insert into public.staff (user_id, outlet_id, role) values ($1, $2, 'host') returning user_id", [USERS.stranger, OUTLET])
     );
     expect(added.rows).toHaveLength(1);
+  });
+});
+
+describe("floor plan storage", () => {
+  const upload = (path: string) => db.query("insert into storage.objects (bucket_id, name) values ('floor-plans', $1) returning id", [path]);
+
+  it("accepts images only, up to 5 MB, in a private bucket", async () => {
+    const bucket = await db.query<Record<string, unknown>>("select * from storage.buckets where id = 'floor-plans'");
+    expect(bucket.rows[0]).toMatchObject({ public: false, file_size_limit: 5242880 });
+    expect(bucket.rows[0].allowed_mime_types).toEqual(["image/png", "image/jpeg", "image/webp"]);
+  });
+
+  it("lets managers upload to their own outlet's folder only", async () => {
+    await expect(as(USERS.manager, () => upload(`${OUTLET}/layout.png`))).resolves.toBeTruthy();
+    await expect(as(USERS.manager, () => upload("00000000-0000-4000-8000-00000000dead/layout.png"))).rejects.toMatchObject({ code: "42501" });
+    await expect(as(USERS.manager, () => upload("not-an-outlet/layout.png"))).rejects.toMatchObject({ code: "42501" });
+    await expect(as(USERS.host, () => upload(`${OUTLET}/host.png`))).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("shows the files to the outlet's staff and to nobody else", async () => {
+    const seen = (user: string) => as(user, () => db.query("select name from storage.objects"));
+    expect((await seen(USERS.host)).rows).toHaveLength(1);
+    // The stranger was added as a host by the owner in the previous block; remove them first.
+    await db.query("delete from public.staff where user_id = $1", [USERS.stranger]);
+    expect((await seen(USERS.stranger)).rows).toHaveLength(0);
+  });
+});
+
+describe("helper functions", () => {
+  it("are not left in the API-exposed public schema", async () => {
+    const res = await db.query<{ nspname: string; proname: string }>(
+      `select n.nspname, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where p.proname in ('current_staff_role', 'is_staff', 'is_manager', 'is_owner', 'storage_outlet')`
+    );
+    expect(res.rows).toHaveLength(5);
+    expect(res.rows.every((r) => r.nspname === "private")).toBe(true);
   });
 });
