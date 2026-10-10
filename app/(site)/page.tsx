@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { BookingForm } from "@/components/BookingForm";
 import { Arrows, Header } from "@/components/Chrome";
 import { img, nights, plates, site } from "@/lib/site";
 
@@ -26,9 +27,6 @@ const jsonLd = {
   acceptsReservations: "True",
   sameAs: [site.instagram, site.facebook],
 };
-
-const times = ["12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM", "7:00 PM", "8:00 PM", "9:00 PM", "10:00 PM", "11:00 PM", "12:00 AM"];
-const guests = ["1", "2", "3", "4", "5", "6", "7", "8", "9+"];
 
 export default function HomePage() {
   return (
@@ -340,43 +338,7 @@ export default function HomePage() {
             <h2 className="display h-lg">
               Pull up a <em>chair.</em>
             </h2>
-            <form className="form" data-reserve={site.email}>
-              <div className="field">
-                <label htmlFor="r-name">Name</label>
-                <input id="r-name" name="name" autoComplete="name" required />
-              </div>
-              <div className="field">
-                <label htmlFor="r-phone">Phone</label>
-                <input id="r-phone" name="phone" type="tel" autoComplete="tel" required />
-              </div>
-              <div className="field">
-                <label htmlFor="r-date">Date</label>
-                <input id="r-date" name="date" type="date" required />
-              </div>
-              <div className="field">
-                <label htmlFor="r-time">Time</label>
-                <select id="r-time" name="time" defaultValue="7:00 PM" required>
-                  {times.map((t) => (
-                    <option key={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field -full">
-                <label htmlFor="r-guests">Guests</label>
-                <select id="r-guests" name="guests" defaultValue="2">
-                  {guests.map((g) => (
-                    <option key={g}>{g}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field -full">
-                <label htmlFor="r-notes">Anything we should know?</label>
-                <textarea id="r-notes" name="notes" rows={3} data-lenis-prevent></textarea>
-              </div>
-              <button className="btn -solid" type="submit">Request a table</button>
-              <a className="btn -ghost" href={site.phoneHref}>Or call us</a>
-              <p className="form__note">Sending opens an email to our team — we'll confirm your table by phone.</p>
-            </form>
+            <BookingForm />
           </div>
           <div className="reserve__pane -gold" id="visit">
             <p className="eyebrow">Visit us</p>

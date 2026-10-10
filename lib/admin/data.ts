@@ -1,6 +1,6 @@
 // Admin data layer: Supabase browser client, row types and small helpers.
 // Access is enforced by the database's row level security, not by this code.
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   localDate,
   localToUtc,
@@ -11,16 +11,7 @@ import {
   type Table,
 } from "@/lib/booking/availability";
 
-let client: SupabaseClient | null = null;
-export function supabase(): SupabaseClient {
-  if (!client) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-    if (!url || !key) throw new Error("Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.");
-    client = createClient(url, key);
-  }
-  return client;
-}
+export { supabase } from "@/lib/supabase";
 
 export type Role = "owner" | "manager" | "host";
 export type Outlet = { id: string; name: string; slug: string; utc_offset_minutes: number; currency: string };

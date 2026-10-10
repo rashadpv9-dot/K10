@@ -314,6 +314,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .field select option { color: var(--ink); }
 .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--gold-500); background: rgb(251 241 220 / 0.14); }
 .form__note { grid-column: 1 / -1; font-size: 0.85rem; opacity: 0.8; }
+.form__error { grid-column: 1 / -1; padding: 0.7rem 0.9rem; border-radius: 10px; background: rgb(211 40 31 / 0.25); border: 1.5px solid var(--red-600); font-size: 0.9rem; }
+.field select:disabled, .form .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.field.-trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.check { display: flex; gap: 0.7rem; align-items: flex-start; font-size: 0.85rem; line-height: 1.4; }
+.check.-full { grid-column: 1 / -1; }
+.check input { width: 1.15rem; height: 1.15rem; margin-top: 0.1rem; flex-shrink: 0; accent-color: var(--gold-500); }
+.booked { display: grid; gap: 1.1rem; justify-items: start; padding: 1.75rem; border: 1.5px solid rgb(251 241 220 / 0.45); border-radius: var(--radius); background: rgb(251 241 220 / 0.08); }
+.booked .eyebrow { color: var(--gold-300); }
+.booked dl { display: grid; gap: 0; width: 100%; margin: 0; }
+.booked dl div { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1rem; padding: 0.7rem 0; border-top: 1px solid rgb(251 241 220 / 0.25); }
+.booked dt { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; padding-top: 0.25rem; }
+.booked dd { margin: 0; font-family: var(--font-display); font-size: 1.2rem; font-weight: 600; }
+.booked .hero__actions { margin-top: 0; }
 .visit { display: grid; gap: 0; }
 .visit li { display: grid; grid-template-columns: 7.5rem 1fr; gap: 1rem; padding: 1rem 0; border-top: 1.5px solid rgb(21 17 13 / 0.18); }
 .visit dt, .visit small { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; padding-top: 0.3rem; }

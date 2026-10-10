@@ -63,6 +63,7 @@ beforeAll(async () => {
   await db.exec(sql("migrations/0001_booking_core.sql"));
   await db.exec(sql("migrations/0002_floor_plan_storage.sql"));
   await db.exec(sql("migrations/0003_private_helpers.sql"));
+  await db.exec(sql("migrations/0004_public_booking.sql"));
   await db.exec(sql("seed.sql"));
 
   for (const id of Object.values(USERS)) await db.query("insert into auth.users (id) values ($1)", [id]);
@@ -254,5 +255,113 @@ describe("helper functions", () => {
     );
     expect(res.rows).toHaveLength(5);
     expect(res.rows.every((r) => r.nspname === "private")).toBe(true);
+  });
+});
+
+describe("public booking (website form)", () => {
+  // A date safely inside the booking window and past the notice period, on the outlet's clock.
+  let day: string;
+  const TERRACE = "00000000-0000-4000-8000-0000000000a2";
+  const at = (time: string, date = day) => `${date}T${time}:00+03:00`;
+
+  type Created = { reference: string; status: string; starts_at: string; ends_at: string; party_size: number };
+  const book = (o: { phone: string; party?: number; time?: string; name?: string; zone?: string | null; email?: string | null; when?: string }) =>
+    as(null, async () => {
+      const res = await db.query<{ r: Created }>("select public.create_booking('adliya', $1, $2, $3, $4, $5, $6, $7, false) as r", [
+        o.name ?? "Web Guest",
+        o.phone,
+        o.email ?? null,
+        o.party ?? 2,
+        o.when ?? at(o.time ?? "19:00"),
+        o.zone ?? null,
+        "From the website",
+      ]);
+      return res.rows[0].r;
+    });
+  const tableOf = async (reference: string) =>
+    (await db.query<{ label: string }>("select t.label from public.bookings b join public.tables t on t.id = b.table_id where b.reference = $1", [reference])).rows[0].label;
+
+  beforeAll(async () => {
+    day = (await db.query<{ d: string }>("select (((now() at time zone 'UTC') + interval '3 hours')::date + 3)::text as d")).rows[0].d;
+  });
+
+  it("gives the form table sizes and busy times, but no personal details", async () => {
+    await insertBooking("T1", "19:00", "21:00").catch(() => null);
+    const ctx = (await as(null, () => db.query<{ c: Record<string, unknown> }>("select public.booking_context('adliya', '2026-10-16') as c"))).rows[0].c;
+    expect(ctx.tables).toHaveLength(9);
+    expect(ctx.zones).toHaveLength(2);
+    expect(ctx.rules).toMatchObject({ auto_confirm_max_party: 4, slot_minutes: 30 });
+    expect((ctx.busy as unknown[]).length).toBeGreaterThan(0);
+    const text = JSON.stringify(ctx);
+    expect(text).not.toContain("Test Guest");
+    expect(text).not.toContain("+973");
+    expect(text).not.toContain("window seat");
+  });
+
+  it("confirms a small party instantly on the smallest free table", async () => {
+    const res = await book({ phone: "+973 3111 0001" });
+    expect(res.status).toBe("confirmed");
+    expect(res.reference).toMatch(/^[0-9A-F]{8}$/);
+    expect(await tableOf(res.reference)).toBe("T1");
+    expect(new Date(res.ends_at).getTime() - new Date(res.starts_at).getTime()).toBe(120 * 60_000);
+  });
+
+  it("moves on to the next table when the first is taken", async () => {
+    const second = await book({ phone: "+973 3111 0002" });
+    const third = await book({ phone: "+973 3111 0003" });
+    expect(await tableOf(second.reference)).toBe("T2");
+    expect(["P1", "P2", "T3", "T4"]).toContain(await tableOf(third.reference));
+  });
+
+  it("sends a party over the instant-confirm limit to staff for approval", async () => {
+    const res = await book({ phone: "+973 3111 0004", party: 6 });
+    expect(res.status).toBe("pending_approval");
+    expect(new Date(res.ends_at).getTime() - new Date(res.starts_at).getTime()).toBe(150 * 60_000);
+  });
+
+  it("keeps to the requested area", async () => {
+    const res = await book({ phone: "+973 3111 0005", zone: TERRACE, time: "20:00" });
+    expect(["P1", "P2"]).toContain(await tableOf(res.reference));
+  });
+
+  it("refuses when no suitable table is free", async () => {
+    await book({ phone: "+973 3111 0006", party: 9, time: "21:00" }); // only T6 seats nine
+    await expect(book({ phone: "+973 3111 0007", party: 9, time: "21:30" })).rejects.toThrow(/no_table/);
+  });
+
+  it("refuses times that are not real slots", async () => {
+    await expect(book({ phone: "+973 3111 0008", time: "19:10" })).rejects.toThrow(/outside_hours/); // not on the half hour
+    await expect(book({ phone: "+973 3111 0008", time: "08:00" })).rejects.toThrow(/outside_hours/); // before opening
+    await expect(book({ phone: "+973 3111 0008", time: "00:30" })).rejects.toThrow(/outside_hours/); // sitting would run past 2 AM
+    await expect(book({ phone: "+973 3111 0008", when: new Date(Date.now() + 10 * 60_000).toISOString() })).rejects.toThrow(/too_soon/);
+    await expect(book({ phone: "+973 3111 0008", when: new Date(Date.now() + 60 * 86_400_000).toISOString() })).rejects.toThrow(/too_far/);
+  });
+
+  it("accepts a slot after midnight that belongs to the evening before", async () => {
+    const next = (await db.query<{ d: string }>("select ($1::date + 1)::text as d", [day])).rows[0].d;
+    const res = await book({ phone: "+973 3111 0009", when: at("00:00", next) });
+    expect(res.status).toBe("confirmed");
+  });
+
+  it("refuses bad details and oversized parties", async () => {
+    await expect(book({ phone: "+973 3111 0010", party: 13 })).rejects.toThrow(/party_too_large/);
+    await expect(book({ phone: "+973 3111 0010", party: 0 })).rejects.toThrow(/invalid_party/);
+    await expect(book({ phone: "abc" })).rejects.toThrow(/invalid_phone/);
+    await expect(book({ phone: "+973 3111 0010", name: "x" })).rejects.toThrow(/invalid_name/);
+    await expect(book({ phone: "+973 3111 0010", email: "not-an-email" })).rejects.toThrow(/invalid_email/);
+    await expect(
+      as(null, () => db.query("select public.create_booking('nowhere', 'Web Guest', '+973 3111 0010', null, 2, $1)", [at("19:00")]))
+    ).rejects.toThrow(/unknown_outlet/);
+  });
+
+  it("limits one phone number to three upcoming bookings", async () => {
+    const phone = "+973 3111 0011";
+    for (const time of ["13:00", "15:30", "22:00"]) await book({ phone, time });
+    await expect(book({ phone, time: "17:30" })).rejects.toThrow(/too_many_bookings/);
+  });
+
+  it("still gives the public no direct access to bookings or customers", async () => {
+    await expect(as(null, () => db.query("select * from public.bookings"))).rejects.toMatchObject({ code: "42501" });
+    await expect(as(null, () => db.query("select * from public.customers"))).rejects.toMatchObject({ code: "42501" });
   });
 });

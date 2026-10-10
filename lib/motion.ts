@@ -342,26 +342,6 @@ export function initSite(): () => void {
     $("span", state)!.textContent = isOpen ? "Open now · until 2 AM" : "Closed · opens 12 PM";
   }
 
-  /* Reservation form → opens a pre-filled email to the restaurant (replaced by real bookings in phase 2) */
-  const form = $<HTMLFormElement>("[data-reserve]");
-  if (form) {
-    const date = form.elements.namedItem("date") as HTMLInputElement | null;
-    if (date) date.min = new Date().toISOString().slice(0, 10);
-    form.addEventListener(
-      "submit",
-      (e) => {
-        e.preventDefault();
-        const d = Object.fromEntries(new FormData(form)) as Record<string, string>;
-        const body = [`Name: ${d.name}`, `Phone: ${d.phone}`, `Date: ${d.date}`, `Time: ${d.time}`, `Guests: ${d.guests}`, d.notes ? `Notes: ${d.notes}` : ""]
-          .filter(Boolean)
-          .join("\n");
-        const subject = `Table request — ${d.date} ${d.time}, ${d.guests} guests`;
-        location.href = `mailto:${form.dataset.reserve}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      },
-      { signal }
-    );
-  }
-
   /* Menu page: highlight the active category tab */
   const tabs = $$<HTMLAnchorElement>(".tabs a");
   if (tabs.length) {
