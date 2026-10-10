@@ -320,6 +320,28 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .check { display: flex; gap: 0.7rem; align-items: flex-start; font-size: 0.85rem; line-height: 1.4; }
 .check.-full { grid-column: 1 / -1; }
 .check input { width: 1.15rem; height: 1.15rem; margin-top: 0.1rem; flex-shrink: 0; accent-color: var(--gold-500); }
+/* Table picker on the booking form */
+.pick { grid-column: 1 / -1; display: grid; gap: 0.6rem; }
+.pick__title { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+.pick__title span { opacity: 0.7; letter-spacing: 0.08em; }
+.pick__floor { position: relative; width: 100%; border-radius: 12px; border: 1.5px solid rgb(251 241 220 / 0.35); background-color: rgb(251 241 220 / 0.06); background-image: linear-gradient(rgb(251 241 220 / 0.07) 1px, transparent 1px), linear-gradient(90deg, rgb(251 241 220 / 0.07) 1px, transparent 1px); background-size: 10% 12.5%; overflow: hidden; }
+.pick__table { position: absolute; display: grid; place-content: center; padding: 0; border: 2px solid var(--cream); border-radius: 8px; background: var(--cream); color: var(--green-900); font-family: var(--font-body); line-height: 1.05; text-align: center; cursor: pointer; transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s; }
+.pick__table b { font-size: clamp(0.62rem, 1vw, 0.85rem); }
+.pick__table small { font-size: clamp(0.5rem, 0.75vw, 0.65rem); opacity: 0.75; }
+.pick__table.-round { border-radius: 50%; }
+.pick__table.-booth { border-radius: 12px 12px 4px 4px; }
+.pick__table.-bar { border-radius: 999px; }
+.pick__table.-free:hover { background: var(--gold-300); border-color: var(--gold-300); }
+.pick__table.is-picked { background: var(--gold-500); border-color: var(--gold-500); color: var(--ink); box-shadow: 0 0 0 4px rgb(246 178 26 / 0.35); }
+.pick__table.-taken { background: rgb(211 40 31 / 0.35); border-color: rgb(211 40 31 / 0.8); color: var(--cream); cursor: not-allowed; }
+.pick__table.-unfit { background: transparent; border-color: rgb(251 241 220 / 0.3); border-style: dashed; color: rgb(251 241 220 / 0.45); cursor: not-allowed; }
+.pick__legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.75rem; }
+.pick__legend li { display: flex; align-items: center; gap: 0.4rem; }
+.pick__legend li::before { content: ""; width: 0.8rem; height: 0.8rem; border-radius: 3px; border: 1.5px solid var(--cream); background: var(--cream); }
+.pick__legend .-picked::before { background: var(--gold-500); border-color: var(--gold-500); }
+.pick__legend .-taken::before { background: rgb(211 40 31 / 0.35); border-color: rgb(211 40 31 / 0.8); }
+.pick__legend .-unfit::before { background: transparent; border-color: rgb(251 241 220 / 0.4); border-style: dashed; }
+
 .booked { display: grid; gap: 1.1rem; justify-items: start; padding: 1.75rem; border: 1.5px solid rgb(251 241 220 / 0.45); border-radius: var(--radius); background: rgb(251 241 220 / 0.08); }
 .booked .eyebrow { color: var(--gold-300); }
 .booked dl { display: grid; gap: 0; width: 100%; margin: 0; }

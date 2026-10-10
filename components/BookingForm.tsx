@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { listSlots, localDate, weekdayOf, type ExistingBooking, type Rules, type Table } from "@/lib/booking/availability";
+import { listSlots, localDate, turnMinutes, weekdayOf, type ExistingBooking, type Rules, type Table } from "@/lib/booking/availability";
 import { site } from "@/lib/site";
 import { supabase } from "@/lib/supabase";
 
@@ -20,15 +20,32 @@ type Context = {
     min_lead_minutes: number;
     max_days_ahead: number;
     auto_confirm_max_party: number;
+    /** Present once the outlet's database supports customers choosing a table. */
+    allow_table_choice?: boolean;
   };
+  plan?: { width: number | null; height: number | null };
   hours: { opens: string; closes: string; is_closed: boolean } | null;
   closed: boolean;
   zones: { id: string; name: string }[];
-  tables: { id: string; label: string; zone_id: string | null; seats_min: number; seats_max: number }[];
+  tables: {
+    id: string;
+    label: string;
+    zone_id: string | null;
+    seats_min: number;
+    seats_max: number;
+    // Position on the floor plan, in percent. Only sent when table choice is supported.
+    shape?: "round" | "square" | "rect" | "booth" | "bar";
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    rotation?: number;
+  }[];
   busy: { table_id: string; starts_at: string; ends_at: string; party_size: number }[];
 };
 
-type Result = { reference: string; status: "confirmed" | "pending_approval"; starts_at: string; party_size: number };
+type Result = { reference: string; status: "confirmed" | "pending_approval"; starts_at: string; party_size: number; table?: string };
+type Pick = "free" | "taken" | "unfit";
 
 // The database answers with short codes; these are the sentences customers see.
 const PROBLEMS: Record<string, string> = {
@@ -42,6 +59,9 @@ const PROBLEMS: Record<string, string> = {
   invalid_name: "Please enter your name.",
   invalid_phone: "Please enter a valid phone number, with the country code if outside Bahrain.",
   invalid_email: "Please check the email address.",
+  table_taken: "That table has just been taken. Please pick another table or time.",
+  table_unsuitable: "That table does not suit your party size. Please pick another.",
+  table_choice_off: "Choosing a table is not available right now. We will pick the best table for you.",
   too_many_bookings: "You already have several upcoming bookings. Please call us to add another.",
   busy: "We are receiving a lot of bookings right now. Please try again in a few minutes or call us.",
 };
@@ -78,6 +98,7 @@ export function BookingForm() {
   const [party, setParty] = useState(2);
   const [zone, setZone] = useState("");
   const [start, setStart] = useState("");
+  const [table, setTable] = useState("");
   const [ctx, setCtx] = useState<Context | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -143,6 +164,23 @@ export function BookingForm() {
 
   const chosen = free.find((s) => s.start.toISOString() === start) ?? free[0];
 
+  // Table picking: shown only when the outlet allows it and the floor positions are available.
+  const canPick = Boolean(ctx?.rules.allow_table_choice && chosen && ctx.tables.every((t) => typeof t.x !== "undefined"));
+  const pickState = useMemo(() => {
+    const states = new Map<string, Pick>();
+    if (!ctx || !chosen) return states;
+    const from = chosen.start.getTime();
+    const to = from + turnMinutes(party, toRules(ctx.rules)) * 60_000;
+    for (const t of ctx.tables) {
+      const fits = t.seats_min <= party && party <= t.seats_max && (!zone || t.zone_id === zone);
+      const taken = ctx.busy.some((b) => b.table_id === t.id && new Date(b.starts_at).getTime() < to && from < new Date(b.ends_at).getTime());
+      states.set(t.id, !fits ? "unfit" : taken ? "taken" : "free");
+    }
+    return states;
+  }, [ctx, chosen, party, zone]);
+  // A pick only counts while that table is still free for the current time and party.
+  const picked = canPick && pickState.get(table) === "free" ? ctx!.tables.find((t) => t.id === table) : undefined;
+
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -152,7 +190,8 @@ export function BookingForm() {
     setSending(true);
     setError("");
     try {
-      const { data, error } = await supabase().rpc("create_booking", {
+      // A chosen table goes through the table-aware function; otherwise the original one.
+      const { data, error } = await supabase().rpc(picked ? "create_table_booking" : "create_booking", {
         p_slug: OUTLET,
         p_name: String(form.get("name") ?? ""),
         p_phone: String(form.get("phone") ?? ""),
@@ -162,6 +201,8 @@ export function BookingForm() {
         p_zone: zone || null,
         p_notes: String(form.get("notes") ?? ""),
         p_marketing: false,
+        // Only sent when the customer chose a table, so older databases keep working.
+        ...(picked ? { p_table: picked.id } : {}),
       });
       if (error) {
         setError(PROBLEMS[error.message] ?? FALLBACK);
@@ -186,6 +227,7 @@ export function BookingForm() {
         <dl>
           <div><dt>When</dt><dd>{whenLabel(result.starts_at, offset)}</dd></div>
           <div><dt>Guests</dt><dd>{result.party_size}</dd></div>
+          {result.table && <div><dt>Table</dt><dd>{result.table}</dd></div>}
           <div><dt>Reference</dt><dd>{result.reference}</dd></div>
         </dl>
         <p>
@@ -201,6 +243,7 @@ export function BookingForm() {
             onClick={() => {
               setResult(null);
               setStart("");
+              setTable("");
               setRefresh((n) => n + 1);
             }}
           >
@@ -248,6 +291,59 @@ export function BookingForm() {
       )}
       {ctx && party > ctx.rules.auto_confirm_max_party && free.length > 0 && (
         <p className="form__note">Groups of {ctx.rules.auto_confirm_max_party + 1} or more are confirmed by our team after you send the request.</p>
+      )}
+      {canPick && ctx && (
+        <div className="pick">
+          <p className="pick__title" id="pick-title">
+            Choose your table <span>(optional)</span>
+          </p>
+          <div
+            className="pick__floor"
+            role="group"
+            aria-labelledby="pick-title"
+            style={{ aspectRatio: ctx.plan?.width && ctx.plan.height ? `${ctx.plan.width} / ${ctx.plan.height}` : "16 / 10" }}
+          >
+            {ctx.tables.map((t) => {
+              const state = pickState.get(t.id) ?? "unfit";
+              const square = t.shape === "round" || t.shape === "square";
+              const isPicked = picked?.id === t.id;
+              const why = state === "taken" ? "taken at this time" : state === "unfit" ? "not suitable for your party" : isPicked ? "selected" : "free";
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`pick__table -${t.shape} -${state}${isPicked ? " is-picked" : ""}`}
+                  style={{
+                    left: `${t.x}%`,
+                    top: `${t.y}%`,
+                    width: `${t.w}%`,
+                    height: square ? undefined : `${t.h}%`,
+                    aspectRatio: square ? "1" : undefined,
+                    transform: `translate(-50%, -50%) rotate(${t.rotation ?? 0}deg)`,
+                  }}
+                  disabled={state !== "free"}
+                  aria-pressed={isPicked}
+                  aria-label={`Table ${t.label}, seats ${t.seats_max}, ${why}`}
+                  onClick={() => setTable(isPicked ? "" : t.id)}
+                >
+                  <b>{t.label}</b>
+                  <small>{t.seats_max}</small>
+                </button>
+              );
+            })}
+          </div>
+          <ul className="pick__legend">
+            <li className="-free">Free</li>
+            <li className="-picked">Your table</li>
+            <li className="-taken">Taken</li>
+            <li className="-unfit">Wrong size or area</li>
+          </ul>
+          <p className="form__note" role="status">
+            {picked
+              ? `Table ${picked.label} selected (seats up to ${picked.seats_max}). Tap it again to let us choose.`
+              : "Tap a free table to choose it, or leave it and we will pick the best one for you."}
+          </p>
+        </div>
       )}
       <div className="field">
         <label htmlFor="r-name">Name</label>

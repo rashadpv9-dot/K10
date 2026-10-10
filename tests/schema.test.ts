@@ -57,6 +57,17 @@ const insertBooking = (table: string | null, from: string, to: string, status = 
     [OUTLET, customerId, table ? tableIds[table] : null, `2026-10-16T${from}:00+03`, `2026-10-16T${to}:00+03`, status]
   );
 
+// A date `ahead` days from today on the outlet's clock. The earlier tests fill 2026-10-16
+// with fixed bookings, so that date is skipped to keep the floor empty for these tests.
+async function clearDay(ahead: number): Promise<string> {
+  const res = await db.query<{ d: string }>(
+    `select case when d = date '2026-10-16' then (d + 1)::text else d::text end as d
+     from (select ((now() at time zone 'UTC') + interval '3 hours')::date + $1::int as d) q`,
+    [ahead]
+  );
+  return res.rows[0].d;
+}
+
 beforeAll(async () => {
   db = new PGlite({ extensions: { btree_gist } });
   await db.exec(SUPABASE_STUB);
@@ -64,6 +75,7 @@ beforeAll(async () => {
   await db.exec(sql("migrations/0002_floor_plan_storage.sql"));
   await db.exec(sql("migrations/0003_private_helpers.sql"));
   await db.exec(sql("migrations/0004_public_booking.sql"));
+  await db.exec(sql("migrations/0005_public_table_choice.sql"));
   await db.exec(sql("seed.sql"));
 
   for (const id of Object.values(USERS)) await db.query("insert into auth.users (id) values ($1)", [id]);
@@ -282,7 +294,7 @@ describe("public booking (website form)", () => {
     (await db.query<{ label: string }>("select t.label from public.bookings b join public.tables t on t.id = b.table_id where b.reference = $1", [reference])).rows[0].label;
 
   beforeAll(async () => {
-    day = (await db.query<{ d: string }>("select (((now() at time zone 'UTC') + interval '3 hours')::date + 3)::text as d")).rows[0].d;
+    day = await clearDay(3);
   });
 
   it("gives the form table sizes and busy times, but no personal details", async () => {
@@ -363,5 +375,65 @@ describe("public booking (website form)", () => {
   it("still gives the public no direct access to bookings or customers", async () => {
     await expect(as(null, () => db.query("select * from public.bookings"))).rejects.toMatchObject({ code: "42501" });
     await expect(as(null, () => db.query("select * from public.customers"))).rejects.toMatchObject({ code: "42501" });
+  });
+});
+
+describe("customers choosing their own table", () => {
+  let day: string;
+  const at = (time: string) => `${day}T${time}:00+03:00`;
+  type Created = { reference: string; status: string; table?: string };
+  const book = (phone: string, table: string | null, o: { party?: number; time?: string } = {}) =>
+    as(null, async () => {
+      const res = await db.query<{ r: Created }>(
+        "select public.create_table_booking('adliya', 'Table Picker', $1, null, $2, $3, null, null, false, $4) as r",
+        [phone, o.party ?? 2, at(o.time ?? "19:00"), table ? tableIds[table] : null]
+      );
+      return res.rows[0].r;
+    });
+  const allow = (on: boolean) => db.query("update public.booking_rules set allow_table_choice = $1", [on]);
+
+  beforeAll(async () => {
+    // A different day from the other public-booking tests, so the floor starts empty.
+    day = await clearDay(8);
+  });
+
+  it("gives the form table positions and the setting, still with no personal details", async () => {
+    await allow(true);
+    const ctx = (await as(null, () => db.query<{ c: Record<string, any> }>("select public.booking_context('adliya', $1) as c", [day]))).rows[0].c;
+    expect(ctx.rules.allow_table_choice).toBe(true);
+    expect(ctx.tables[0]).toMatchObject({ label: "P1", shape: "round" });
+    expect(Number(ctx.tables[0].x)).toBe(20);
+    expect(JSON.stringify(ctx)).not.toContain("+973");
+  });
+
+  it("refuses a chosen table when the outlet has the option switched off", async () => {
+    await allow(false);
+    await expect(book("+973 3222 0001", "T3")).rejects.toThrow(/table_choice_off/);
+    await allow(true);
+  });
+
+  it("books exactly the table the customer picked", async () => {
+    const res = await book("+973 3222 0002", "T4");
+    expect(res).toMatchObject({ status: "confirmed", table: "T4" });
+  });
+
+  it("refuses a picked table that is already taken, without falling back to another", async () => {
+    await expect(book("+973 3222 0003", "T4", { time: "20:00" })).rejects.toThrow(/table_taken/);
+    const count = await db.query("select 1 from public.customers where phone = '+973 3222 0003'");
+    expect(count.rows).toHaveLength(0); // nothing was saved for the refused request
+  });
+
+  it("refuses a table that is the wrong size or switched off", async () => {
+    await expect(book("+973 3222 0004", "T1", { party: 4 })).rejects.toThrow(/table_unsuitable/); // T1 seats two
+    await expect(book("+973 3222 0004", "T6", { party: 2 })).rejects.toThrow(/table_unsuitable/); // T6 needs six
+    await db.query("update public.tables set is_active = false where label = 'P2'");
+    await expect(book("+973 3222 0004", "P2")).rejects.toThrow(/table_unsuitable/);
+    await db.query("update public.tables set is_active = true where label = 'P2'");
+  });
+
+  it("still assigns a table automatically when none is picked", async () => {
+    const res = await book("+973 3222 0005", null);
+    expect(res.status).toBe("confirmed");
+    expect(res.table).toBeUndefined();
   });
 });
