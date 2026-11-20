@@ -6,6 +6,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
+// Always verify the database certificate (see lib/server/db.ts).
+const strictSsl = (url) => {
+  const u = new URL(url);
+  const mode = u.searchParams.get("sslmode");
+  if (mode && mode !== "disable" && mode !== "verify-full") u.searchParams.set("sslmode", "verify-full");
+  return u.toString();
+};
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -13,7 +21,7 @@ if (!url) {
   process.exit(1);
 }
 
-const client = new pg.Client({ connectionString: url });
+const client = new pg.Client({ connectionString: strictSsl(url) });
 await client.connect();
 
 async function inTransaction(work) {

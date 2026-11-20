@@ -6,6 +6,14 @@ import { writeFileSync } from "node:fs";
 import bcrypt from "bcryptjs";
 import pg from "pg";
 
+// Always verify the database certificate (see lib/server/db.ts).
+const strictSsl = (url) => {
+  const u = new URL(url);
+  const mode = u.searchParams.get("sslmode");
+  if (mode && mode !== "disable" && mode !== "verify-full") u.searchParams.set("sslmode", "verify-full");
+  return u.toString();
+};
+
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 ? process.argv[i + 1] : fallback;
@@ -26,7 +34,7 @@ const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
 const password = Array.from(randomBytes(18), (b) => alphabet[b % alphabet.length]).join("");
 const hash = await bcrypt.hash(password, 12);
 
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+const client = new pg.Client({ connectionString: strictSsl(process.env.DATABASE_URL) });
 await client.connect();
 try {
   await client.query("begin");

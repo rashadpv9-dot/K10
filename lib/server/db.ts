@@ -7,6 +7,17 @@ export type Db = { query<T = Record<string, unknown>>(text: string, params?: unk
 
 export class DbUnavailable extends Error {}
 
+/**
+ * Always verify the database's certificate and host name. pg currently treats
+ * sslmode=require this way but will weaken it in its next major version, so say it explicitly.
+ */
+export function strictSsl(url: string): string {
+  const u = new URL(url);
+  const mode = u.searchParams.get("sslmode");
+  if (mode && mode !== "disable" && mode !== "verify-full") u.searchParams.set("sslmode", "verify-full");
+  return u.toString();
+}
+
 let override: Db | null = null;
 
 /** Tests swap in an in-process database; production uses DATABASE_URL. */
@@ -22,7 +33,7 @@ export function db(): Db {
   if (!url) throw new DbUnavailable("DATABASE_URL is not set");
   // One pool per server instance; reused across requests and across hot reloads in development.
   globalForDb.k10Pool ??= new Pool({
-    connectionString: url,
+    connectionString: strictSsl(url),
     max: Number(process.env.DATABASE_POOL_MAX ?? 5),
     connectionTimeoutMillis: 8_000,
     idleTimeoutMillis: 10_000,
