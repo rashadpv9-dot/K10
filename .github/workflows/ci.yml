@@ -1,0 +1,45 @@
+# Continuous integration: every push and pull request must pass these checks.
+# Deployment (CD) is done by Vercel's Git integration: branches get a preview,
+# main goes live, and live builds apply database migrations (scripts/vercel-build.mjs).
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Type check, tests, build, audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      # Runs the real schema in an in-process Postgres; no database secrets needed.
+      - name: Tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Security audit (packages the live site uses)
+        run: npm audit --omit=dev --audit-level=high
