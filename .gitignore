@@ -7,4 +7,5 @@ Thumbs.db
 .env*.local
 
 .vercel
-demo-login.txt
+demo-login*.txt
+.pglite/

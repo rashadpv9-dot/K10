@@ -1,6 +1,7 @@
-// Admin data layer: Supabase browser client, row types and small helpers.
-// Access is enforced by the database's row level security, not by this code.
-import type { SupabaseClient } from "@supabase/supabase-js";
+// Admin data layer: row types and small helpers shared by the admin screens.
+// All reads and writes go through the site's server routes, which check the signed-in
+// staff member's role before touching the database.
+import { ApiError } from "./api";
 import {
   localDate,
   localToUtc,
@@ -11,12 +12,12 @@ import {
   type Table,
 } from "@/lib/booking/availability";
 
-export { supabase } from "@/lib/supabase";
+export { api, ApiError, qs } from "./api";
 
 export type Role = "owner" | "manager" | "host";
 export type Outlet = { id: string; name: string; slug: string; utc_offset_minutes: number; currency: string };
 export type Zone = { id: string; name: string; sort: number };
-export type FloorPlan = { id: string; name: string; image_path: string | null; image_width: number | null; image_height: number | null };
+export type FloorPlan = { id: string; name: string; image_url: string | null; image_width: number | null; image_height: number | null };
 export type TableRow = {
   id: string;
   outlet_id: string;
@@ -66,11 +67,7 @@ export type BookingRow = {
   table: { id: string; label: string } | null;
 };
 
-export const BOOKING_SELECT =
-  "id, reference, table_id, zone_id, party_size, starts_at, ends_at, status, source, notes, is_sample, customer:customers(id, name, phone, email), table:tables(id, label)";
-
 export type Ctx = {
-  sb: SupabaseClient;
   outlet: Outlet;
   role: Role;
   canManage: boolean;
@@ -162,11 +159,29 @@ export const toDayHours = (rows: HoursRow[], weekday: number): DayHours => {
   return h ? { opens: h.opens, closes: h.closes, isClosed: h.is_closed } : { opens: "12:00", closes: "02:00", isClosed: true };
 };
 
-/** Turns a database error into a sentence staff can act on. */
-export function explain(error: { code?: string; message: string }): string {
-  if (error.code === "23P01") return "That table is already taken for part of that time. Choose another table or time.";
-  if (error.code === "42501") return "Your role does not allow that change.";
-  if (error.code === "23505") return "That already exists (duplicate name or number).";
-  if (error.code === "23514") return "One of the values is out of range.";
-  return error.message;
+// Server error codes, in words staff can act on.
+const MESSAGES: Record<string, string> = {
+  network: "Can't reach the server. Check the internet connection and try again.",
+  database_unavailable: "The booking database isn't responding right now. Try again in a minute.",
+  table_taken: "That table is already taken for part of that time. Choose another table or time.",
+  no_table: "No suitable table is free at that time.",
+  role_not_allowed: "Your role does not allow that change.",
+  not_signed_in: "Your session has ended. Please sign in again.",
+  duplicate: "That already exists (duplicate name or number).",
+  invalid_value: "One of the values is out of range.",
+  invalid_input: "Some of the details are missing or not valid.",
+  not_found: "That item no longer exists. Refresh the page.",
+  storage_not_configured: "Image storage is not connected yet.",
+  image_type_not_allowed: "Use a PNG, JPG or WebP image.",
+  image_too_large: "That image is over 5 MB. Export a smaller one.",
+  wrong_credentials: "Wrong email or password.",
+  locked: "Too many wrong attempts. Wait 15 minutes and try again.",
+  bad_origin: "That request was blocked. Reload the page and try again.",
+};
+
+/** Turns any failure into a sentence staff can act on. */
+export function explain(error: unknown): string {
+  if (error instanceof ApiError) return MESSAGES[error.code] ?? "Something went wrong. Please try again.";
+  if (error instanceof Error) return error.message;
+  return "Something went wrong. Please try again.";
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
-import { explain, type Ctx, type TableRow } from "@/lib/admin/data";
+import { api, explain, type Ctx, type TableRow } from "@/lib/admin/data";
 import { FloorMap } from "./FloorMap";
 
 const SHAPES: [TableRow["shape"], string][] = [
@@ -27,7 +27,7 @@ const imageSize = (file: File) =>
   });
 
 export function LayoutEditor({ ctx }: { ctx: Ctx }) {
-  const { sb, outlet, plan, zones, canManage, reload } = ctx;
+  const { plan, zones, canManage, reload } = ctx;
   const [tables, setTables] = useState(ctx.tables);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -37,13 +37,17 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
 
   useEffect(() => setTables(ctx.tables), [ctx.tables]);
 
-  const run = async (work: () => PromiseLike<{ error: { code?: string; message: string } | null }>, done: string) => {
+  const run = async (work: () => Promise<unknown>, done: string) => {
     setBusy(true);
     setError("");
     setNotice("");
-    const { error } = await work();
+    try {
+      await work();
+    } catch (err) {
+      setBusy(false);
+      return setError(explain(err));
+    }
     setBusy(false);
-    if (error) return setError(explain(error));
     setNotice(done);
     await reload();
   };
@@ -58,14 +62,14 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
 
   const savePosition = (id: string) => {
     const t = tables.find((row) => row.id === id);
-    if (t) run(() => sb.from("tables").update({ x: t.x, y: t.y }).eq("id", id), `${t.label} moved.`);
+    if (t) run(() => api.patch(`/api/admin/tables/${id}`, { x: t.x, y: t.y }), `${t.label} moved.`);
   };
 
   const saveTable = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selected) return;
     const { label, seats_min, seats_max, shape, zone_id, w, h, rotation, is_active } = selected;
-    run(() => sb.from("tables").update({ label: label.trim(), seats_min, seats_max, shape, zone_id, w, h, rotation, is_active }).eq("id", selected.id), `${label} saved.`);
+    run(() => api.patch(`/api/admin/tables/${selected.id}`, { label: label.trim(), seats_min, seats_max, shape, zone_id, w, h, rotation, is_active }), `${label} saved.`);
   };
 
   const addTable = () => {
@@ -73,7 +77,7 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
     let n = tables.length + 1;
     while (taken.has(`T${n}`)) n += 1;
     run(
-      () => sb.from("tables").insert({ outlet_id: outlet.id, floor_plan_id: plan.id, zone_id: zones[0]?.id ?? null, label: `T${n}`, seats_min: 2, seats_max: 4, shape: "square", x: 50, y: 50 }),
+      () => api.post("/api/admin/tables", { label: `T${n}`, seats_min: 2, seats_max: 4, shape: "square", zone_id: zones[0]?.id ?? null, x: 50, y: 50, w: 7, h: 7, rotation: 0, is_active: true }),
       `Table T${n} added in the middle of the floor. Drag it into place.`
     );
   };
@@ -81,7 +85,7 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
   const removeTable = () => {
     if (!selected || !window.confirm(`Remove table ${selected.label}? Its past bookings are kept, without a table.`)) return;
     setSelectedId(null);
-    run(() => sb.from("tables").delete().eq("id", selected.id), `${selected.label} removed.`);
+    run(() => api.del(`/api/admin/tables/${selected.id}`), `${selected.label} removed.`);
   };
 
   const upload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -92,26 +96,19 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
     if (file.size > MAX_IMAGE_BYTES) return fail("That image is over 5 MB. Export a smaller one.");
     try {
       const { width, height } = await imageSize(file);
-      const path = `${outlet.id}/${Date.now()}.${file.type.split("/")[1].replace("jpeg", "jpg")}`;
-      await run(async () => {
-        const up = await sb.storage.from("floor-plans").upload(path, file, { contentType: file.type });
-        if (up.error) return { error: { message: up.error.message } };
-        const saved = await sb.from("floor_plans").update({ image_path: path, image_width: width, image_height: height }).eq("id", plan.id);
-        if (!saved.error && plan.image_path) await sb.storage.from("floor-plans").remove([plan.image_path]);
-        return saved;
-      }, "Layout image uploaded. Drag the tables onto it.");
+      const body = new FormData();
+      body.set("file", file);
+      body.set("width", String(width));
+      body.set("height", String(height));
+      await run(() => api.post("/api/admin/floor-plan", body), "Layout image uploaded. Drag the tables onto it.");
     } catch (err) {
       fail((err as Error).message);
     }
   };
 
   const removeImage = () => {
-    if (!plan.image_path || !window.confirm("Remove the layout image? The tables stay where they are.")) return;
-    run(async () => {
-      const saved = await sb.from("floor_plans").update({ image_path: null, image_width: null, image_height: null }).eq("id", plan.id);
-      if (!saved.error) await sb.storage.from("floor-plans").remove([plan.image_path!]);
-      return saved;
-    }, "Layout image removed.");
+    if (!plan.image_url || !window.confirm("Remove the layout image? The tables stay where they are.")) return;
+    run(() => api.del("/api/admin/floor-plan"), "Layout image removed.");
   };
 
   const addZone = (e: FormEvent<HTMLFormElement>) => {
@@ -120,7 +117,7 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
     const name = String(new FormData(form).get("zone")).trim();
     if (!name) return;
     form.reset();
-    run(() => sb.from("zones").insert({ outlet_id: outlet.id, name, sort: zones.length + 1 }), `Area "${name}" added.`);
+    run(() => api.post("/api/admin/zones", { name }), `Area "${name}" added.`);
   };
 
   const seats = tables.filter((t) => t.is_active).reduce((sum, t) => sum + t.seats_max, 0);
@@ -135,10 +132,10 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
         {canManage && (
           <span className="adm-actions">
             <label className={`adm-btn${busy ? " is-disabled" : ""}`}>
-              {plan.image_path ? "Replace layout image" : "Upload layout image"}
+              {plan.image_url ? "Replace layout image" : "Upload layout image"}
               <input type="file" accept={IMAGE_TYPES.join(",")} onChange={upload} hidden disabled={busy} />
             </label>
-            {plan.image_path && <button className="adm-btn" onClick={removeImage} disabled={busy}>Remove image</button>}
+            {plan.image_url && <button className="adm-btn" onClick={removeImage} disabled={busy}>Remove image</button>}
             <button className="adm-btn -primary" onClick={addTable} disabled={busy}>Add table</button>
           </span>
         )}
@@ -222,7 +219,7 @@ export function LayoutEditor({ ctx }: { ctx: Ctx }) {
                   <li key={z.id}>
                     <div><b>{z.name}</b><small>{count} table{count === 1 ? "" : "s"}</small></div>
                     {canManage && count === 0 && (
-                      <button className="adm-btn -sm" disabled={busy} onClick={() => run(() => sb.from("zones").delete().eq("id", z.id), `Area "${z.name}" removed.`)}>Remove</button>
+                      <button className="adm-btn -sm" disabled={busy} onClick={() => run(() => api.del(`/api/admin/zones/${z.id}`), `Area "${z.name}" removed.`)}>Remove</button>
                     )}
                   </li>
                 );

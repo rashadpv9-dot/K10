@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { listSlots, pickTable, turnMinutes, weekdayOf, type BookingStatus } from "@/lib/booking/availability";
 import {
-  BOOKING_SELECT,
   LIVE_STATUSES,
+  api,
+  qs,
   SOURCE_LABEL,
   STATUS_LABEL,
   dateLabel,
@@ -37,7 +38,7 @@ const NEXT: Partial<Record<BookingStatus, [BookingStatus, string, boolean?][]>> 
 };
 
 export function Bookings({ ctx }: { ctx: Ctx }) {
-  const { sb, outlet, tables } = ctx;
+  const { outlet, tables } = ctx;
   const offset = outlet.utc_offset_minutes;
   const [date, setDate] = useState(() => serviceDay(new Date(), offset));
   const [rows, setRows] = useState<BookingRow[]>([]);
@@ -48,10 +49,13 @@ export function Bookings({ ctx }: { ctx: Ctx }) {
 
   const load = useCallback(async () => {
     const [from, to] = dayBounds(date, offset);
-    const { data, error } = await sb.from("bookings").select(BOOKING_SELECT).eq("outlet_id", outlet.id).gte("starts_at", from).lt("starts_at", to).order("starts_at");
-    if (error) return setError(explain(error));
-    setRows(data as unknown as BookingRow[]);
-  }, [sb, outlet.id, date, offset]);
+    try {
+      const { bookings } = await api.get<{ bookings: BookingRow[] }>(`/api/admin/bookings?${qs({ from, to })}`);
+      setRows(bookings);
+    } catch (err) {
+      setError(explain(err));
+    }
+  }, [date, offset]);
 
   useEffect(() => {
     load();
@@ -60,9 +64,12 @@ export function Bookings({ ctx }: { ctx: Ctx }) {
   const update = async (id: string, patch: Record<string, unknown>, done: string) => {
     setError("");
     setNotice("");
-    const { error } = await sb.from("bookings").update(patch).eq("id", id);
-    if (error) setError(explain(error));
-    else setNotice(done);
+    try {
+      await api.patch(`/api/admin/bookings/${id}`, patch);
+      setNotice(done);
+    } catch (err) {
+      setError(explain(err));
+    }
     await load();
   };
 
@@ -181,7 +188,7 @@ export function Bookings({ ctx }: { ctx: Ctx }) {
 }
 
 function NewBooking({ ctx, defaultDate, onSaved }: { ctx: Ctx; defaultDate: string; onSaved: (date: string, message: string) => void }) {
-  const { sb, outlet, rules, hours, zones, tables } = ctx;
+  const { outlet, rules, hours, zones, tables } = ctx;
   const offset = outlet.utc_offset_minutes;
   const [date, setDate] = useState(defaultDate);
   const [party, setParty] = useState(2);
@@ -195,12 +202,14 @@ function NewBooking({ ctx, defaultDate, onSaved }: { ctx: Ctx; defaultDate: stri
     let live = true;
     const [from, to] = dayBounds(shiftDate(date, -1), offset);
     const until = new Date(new Date(to).getTime() + 24 * 3_600_000).toISOString();
-    sb.from("bookings").select(BOOKING_SELECT).eq("outlet_id", outlet.id).gte("starts_at", from).lt("starts_at", until)
-      .then(({ data }) => live && setDayRows((data ?? []) as unknown as BookingRow[]));
+    api
+      .get<{ bookings: BookingRow[] }>(`/api/admin/bookings?${qs({ from, to: until })}`)
+      .then(({ bookings }) => live && setDayRows(bookings))
+      .catch((err) => live && setError(explain(err)));
     return () => {
       live = false;
     };
-  }, [sb, outlet.id, date, offset]);
+  }, [date, offset]);
 
   const engine = useMemo(() => ({ rules: staffRules(rules), tables: toEngineTables(tables), bookings: toExisting(dayRows) }), [rules, tables, dayRows]);
   const slots = useMemo(
@@ -217,33 +226,26 @@ function NewBooking({ ctx, defaultDate, onSaved }: { ctx: Ctx; defaultDate: stri
     setBusy(true);
     setError("");
 
-    const customer = await sb
-      .from("customers")
-      .upsert({ outlet_id: outlet.id, name: String(form.get("name")).trim(), phone: String(form.get("phone")).trim(), email: String(form.get("email") || "").trim() || null }, { onConflict: "outlet_id,phone" })
-      .select("id")
-      .single();
-    if (customer.error) {
-      setBusy(false);
-      return setError(explain(customer.error));
-    }
-
     const end = new Date(chosen.start.getTime() + turnMinutes(party, engine.rules) * 60_000);
     // Re-pick at submit time; the database constraint is the final guard against a clash.
     const table = pickTable({ partySize: party, start: chosen.start, end, zoneId: zone || null, tables: engine.tables, bookings: engine.bookings, now: new Date() });
-    const { error } = await sb.from("bookings").insert({
-      outlet_id: outlet.id,
-      customer_id: customer.data.id,
-      table_id: table?.id ?? chosen.tableId,
-      zone_id: zone || null,
-      party_size: party,
-      starts_at: chosen.start.toISOString(),
-      ends_at: end.toISOString(),
-      status: "confirmed",
-      source: String(form.get("source")),
-      notes: String(form.get("notes") || "").trim() || null,
-    });
+    try {
+      await api.post("/api/admin/bookings", {
+        name: String(form.get("name")).trim(),
+        phone: String(form.get("phone")).trim(),
+        email: String(form.get("email") || "").trim() || null,
+        party_size: party,
+        starts_at: chosen.start.toISOString(),
+        table_id: table?.id ?? chosen.tableId,
+        zone_id: zone || null,
+        source: String(form.get("source")),
+        notes: String(form.get("notes") || "").trim() || null,
+      });
+    } catch (err) {
+      setBusy(false);
+      return setError(explain(err));
+    }
     setBusy(false);
-    if (error) return setError(explain(error));
     onSaved(serviceDay(chosen.start, offset), `Booked ${form.get("name")} for ${chosen.label}.`);
   };
 

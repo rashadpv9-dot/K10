@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { listSlots, localDate, turnMinutes, weekdayOf, type ExistingBooking, type Rules, type Table } from "@/lib/booking/availability";
 import { site } from "@/lib/site";
-import { supabase } from "@/lib/supabase";
+import { ApiError, api, qs } from "@/lib/admin/api";
 
 const OUTLET = "adliya";
 const BAHRAIN_OFFSET = 180;
@@ -118,10 +118,9 @@ export function BookingForm() {
     setLoading(true);
     (async () => {
       try {
-        const { data, error } = await supabase().rpc("booking_context", { p_slug: OUTLET, p_date: date });
+        const data = await api.get<Context>(`/api/public/availability?${qs({ date, outlet: OUTLET })}`);
         if (!live) return;
-        if (error) throw error;
-        setCtx(data as Context);
+        setCtx(data);
         setError("");
       } catch {
         if (live) setError(FALLBACK);
@@ -190,29 +189,22 @@ export function BookingForm() {
     setSending(true);
     setError("");
     try {
-      // A chosen table goes through the table-aware function; otherwise the original one.
-      const { data, error } = await supabase().rpc(picked ? "create_table_booking" : "create_booking", {
-        p_slug: OUTLET,
-        p_name: String(form.get("name") ?? ""),
-        p_phone: String(form.get("phone") ?? ""),
-        p_email: String(form.get("email") ?? ""),
-        p_party: party,
-        p_starts_at: chosen.start.toISOString(),
-        p_zone: zone || null,
-        p_notes: String(form.get("notes") ?? ""),
-        p_marketing: false,
-        // Only sent when the customer chose a table, so older databases keep working.
-        ...(picked ? { p_table: picked.id } : {}),
+      const data = await api.post<Result>("/api/public/bookings", {
+        outlet: OUTLET,
+        name: String(form.get("name") ?? ""),
+        phone: String(form.get("phone") ?? ""),
+        email: String(form.get("email") ?? "") || null,
+        party_size: party,
+        starts_at: chosen.start.toISOString(),
+        zone_id: zone || null,
+        table_id: picked?.id ?? null,
+        notes: String(form.get("notes") ?? ""),
       });
-      if (error) {
-        setError(PROBLEMS[error.message] ?? FALLBACK);
-        // Someone may have taken the slot; show the current free times.
-        setRefresh((n) => n + 1);
-      } else {
-        setResult(data as Result);
-      }
-    } catch {
-      setError(FALLBACK);
+      setResult(data);
+    } catch (err) {
+      setError((err instanceof ApiError && PROBLEMS[err.code]) || FALLBACK);
+      // Someone may have taken the slot; show the current free times.
+      setRefresh((n) => n + 1);
     } finally {
       setSending(false);
     }

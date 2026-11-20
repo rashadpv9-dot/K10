@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { supabase, type Ctx, type FloorPlan, type HoursRow, type Outlet, type Role, type RulesRow, type TableRow, type Zone } from "@/lib/admin/data";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api, ApiError, explain, type Ctx, type FloorPlan, type HoursRow, type Outlet, type Role, type RulesRow, type TableRow, type Zone } from "@/lib/admin/data";
 import { LOGO } from "@/lib/site";
 import { Bookings } from "./Bookings";
 import { LayoutEditor } from "./LayoutEditor";
@@ -17,41 +16,24 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-type Loaded = Omit<Ctx, "reload" | "sb">;
+type Me = { email: string; name: string; role: Role };
+type Loaded = Omit<Ctx, "reload">;
+type OutletResponse = {
+  outlet: Outlet;
+  role: Role;
+  rules: RulesRow;
+  hours: HoursRow[];
+  zones: Zone[];
+  plan: FloorPlan;
+  tables: TableRow[];
+};
 
-async function loadOutlet(sb: SupabaseClient, userId: string): Promise<Loaded> {
-  const staff = await sb.from("staff").select("role, outlet:outlets(id, name, slug, utc_offset_minutes, currency)").eq("user_id", userId).limit(1);
-  if (staff.error) throw new Error(staff.error.message);
-  const row = staff.data[0] as unknown as { role: Role; outlet: Outlet } | undefined;
-  if (!row?.outlet) throw new Error("This account is not set up as staff at any outlet.");
-  const outlet = row.outlet;
-
-  const [rules, hours, zones, plan] = await Promise.all([
-    sb.from("booking_rules").select("*").eq("outlet_id", outlet.id).single(),
-    sb.from("opening_hours").select("*").eq("outlet_id", outlet.id).order("weekday"),
-    sb.from("zones").select("id, name, sort").eq("outlet_id", outlet.id).order("sort"),
-    sb.from("floor_plans").select("id, name, image_path, image_width, image_height").eq("outlet_id", outlet.id).eq("is_active", true).single(),
-  ]);
-  const failed = [rules, hours, zones, plan].find((r) => r.error);
-  if (failed?.error) throw new Error(failed.error.message);
-
-  const tables = await sb.from("tables").select("*").eq("floor_plan_id", (plan.data as FloorPlan).id).order("label");
-  if (tables.error) throw new Error(tables.error.message);
-
-  return {
-    outlet,
-    role: row.role,
-    canManage: row.role !== "host",
-    rules: rules.data as RulesRow,
-    hours: hours.data as HoursRow[],
-    zones: zones.data as Zone[],
-    plan: plan.data as FloorPlan,
-    // numeric columns arrive as numbers or strings depending on the driver; normalise.
-    tables: (tables.data as TableRow[]).map((t) => ({ ...t, x: Number(t.x), y: Number(t.y), w: Number(t.w), h: Number(t.h), rotation: Number(t.rotation) })),
-  };
+async function loadOutlet(): Promise<Loaded> {
+  const d = await api.get<OutletResponse>("/api/admin/outlet");
+  return { outlet: d.outlet, role: d.role, canManage: d.role !== "host", rules: d.rules, hours: d.hours, zones: d.zones, plan: d.plan, tables: d.tables };
 }
 
-function Login({ sb }: { sb: SupabaseClient }) {
+function Login({ onSignedIn }: { onSignedIn: (me: Me) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -60,9 +42,14 @@ function Login({ sb }: { sb: SupabaseClient }) {
     const form = new FormData(e.currentTarget);
     setBusy(true);
     setError("");
-    const { error } = await sb.auth.signInWithPassword({ email: String(form.get("email")), password: String(form.get("password")) });
-    setBusy(false);
-    if (error) setError(error.message === "Invalid login credentials" ? "Wrong email or password." : error.message);
+    try {
+      const { staff } = await api.post<{ staff: Me }>("/api/auth/login", { email: String(form.get("email")), password: String(form.get("password")) });
+      onSignedIn(staff);
+    } catch (err) {
+      setError(explain(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -88,47 +75,68 @@ function Login({ sb }: { sb: SupabaseClient }) {
 }
 
 export function AdminApp() {
-  const [sb, configError] = useMemo<[SupabaseClient | null, string]>(() => {
-    try {
-      return [supabase(), ""];
-    } catch (e) {
-      return [null, (e as Error).message];
-    }
-  }, []);
   // undefined = still checking, null = signed out
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
-  const userId = session?.user.id;
+
+  const checkSession = useCallback(async () => {
+    try {
+      const { staff } = await api.get<{ staff: Me }>("/api/auth/me");
+      setMe(staff);
+      setError("");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setMe(null);
+        setError("");
+      } else {
+        setError(explain(err));
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    if (!sb) return;
-    sb.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = sb.auth.onAuthStateChange((_event, next) => setSession(next));
-    return () => sub.subscription.unsubscribe();
-  }, [sb]);
+    checkSession();
+  }, [checkSession]);
 
   const reload = useCallback(async () => {
-    if (!sb || !userId) return;
     try {
-      setData(await loadOutlet(sb, userId));
+      setData(await loadOutlet());
       setError("");
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) setMe(null);
+      else setError(explain(err));
     }
-  }, [sb, userId]);
+  }, []);
 
   useEffect(() => {
-    if (userId) reload();
+    if (me) reload();
     else setData(null);
-  }, [userId, reload]);
+  }, [me, reload]);
 
-  if (!sb) return <main className="adm-login"><p className="adm-error">{configError}</p></main>;
-  if (session === undefined) return <main className="adm-login"><p className="adm-muted">Loading…</p></main>;
-  if (!session) return <Login sb={sb} />;
+  const signOut = async () => {
+    await api.post("/api/auth/logout").catch(() => undefined);
+    setMe(null);
+  };
 
-  const ctx: Ctx | null = data ? { ...data, sb, reload } : null;
+  if (me === undefined) {
+    return (
+      <main className="adm-login">
+        {error ? (
+          <div className="adm-card adm-login__card">
+            <p className="adm-error" role="alert">{error}</p>
+            <button className="adm-btn -primary" onClick={() => { setError(""); checkSession(); }}>Try again</button>
+          </div>
+        ) : (
+          <p className="adm-muted">Loading…</p>
+        )}
+      </main>
+    );
+  }
+  if (!me) return <Login onSignedIn={setMe} />;
+
+  const ctx: Ctx | null = data ? { ...data, reload } : null;
 
   return (
     <div className="adm">
@@ -148,13 +156,18 @@ export function AdminApp() {
           ))}
         </nav>
         <div className="adm-user">
-          <span title={session.user.email}>{session.user.email}</span>
-          <small>{ctx ? ctx.role : ""}</small>
-          <button className="adm-btn -ghost" onClick={() => sb.auth.signOut()}>Sign out</button>
+          <span title={me.email}>{me.name || me.email}</span>
+          <small>{me.role}</small>
+          <button className="adm-btn -ghost" onClick={signOut}>Sign out</button>
         </div>
       </aside>
       <main className="adm-main">
-        {error && <p className="adm-error" role="alert">{error}</p>}
+        {error && (
+          <p className="adm-error" role="alert">
+            {error}{" "}
+            <button className="adm-btn -sm" onClick={reload}>Try again</button>
+          </p>
+        )}
         {!ctx && !error && <p className="adm-muted">Loading…</p>}
         {ctx && tab === "overview" && <Overview ctx={ctx} goTo={(t) => setTab(t as Tab)} />}
         {ctx && tab === "bookings" && <Bookings ctx={ctx} />}

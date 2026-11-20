@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BOOKING_SELECT, STATUS_LABEL, dateLabel, dayBounds, explain, serviceDay, timeLabel, type BookingRow, type Ctx, type TableRow } from "@/lib/admin/data";
+import { STATUS_LABEL, api, dateLabel, dayBounds, explain, qs, serviceDay, timeLabel, type BookingRow, type Ctx, type TableRow } from "@/lib/admin/data";
 import { FloorLegend, FloorMap, type TableState } from "./FloorMap";
 
 const SOON_MS = 2 * 3_600_000;
 
 export function Overview({ ctx, goTo }: { ctx: Ctx; goTo: (tab: string) => void }) {
-  const { sb, outlet } = ctx;
+  const { outlet } = ctx;
   const offset = outlet.utc_offset_minutes;
   const [today, setToday] = useState<BookingRow[]>([]);
   const [waiting, setWaiting] = useState<BookingRow[]>([]);
@@ -17,15 +17,18 @@ export function Overview({ ctx, goTo }: { ctx: Ctx; goTo: (tab: string) => void 
 
   const load = useCallback(async () => {
     const [from, to] = dayBounds(date, offset);
-    const [day, pending] = await Promise.all([
-      sb.from("bookings").select(BOOKING_SELECT).eq("outlet_id", outlet.id).gte("starts_at", from).lt("starts_at", to).order("starts_at"),
-      sb.from("bookings").select(BOOKING_SELECT).eq("outlet_id", outlet.id).eq("status", "pending_approval").gte("starts_at", from).order("starts_at"),
-    ]);
-    if (day.error || pending.error) return setError(explain((day.error ?? pending.error)!));
-    setToday(day.data as unknown as BookingRow[]);
-    setWaiting(pending.data as unknown as BookingRow[]);
-    setError("");
-  }, [sb, outlet.id, date, offset]);
+    try {
+      const [day, pending] = await Promise.all([
+        api.get<{ bookings: BookingRow[] }>(`/api/admin/bookings?${qs({ from, to })}`),
+        api.get<{ bookings: BookingRow[] }>(`/api/admin/bookings?${qs({ from, status: "pending_approval" })}`),
+      ]);
+      setToday(day.bookings);
+      setWaiting(pending.bookings);
+      setError("");
+    } catch (err) {
+      setError(explain(err));
+    }
+  }, [date, offset]);
 
   useEffect(() => {
     load();
@@ -37,8 +40,11 @@ export function Overview({ ctx, goTo }: { ctx: Ctx; goTo: (tab: string) => void 
   }, [load]);
 
   const decide = async (id: string, status: "confirmed" | "declined") => {
-    const { error } = await sb.from("bookings").update({ status }).eq("id", id);
-    if (error) setError(explain(error));
+    try {
+      await api.patch(`/api/admin/bookings/${id}`, { status });
+    } catch (err) {
+      setError(explain(err));
+    }
     await load();
   };
 

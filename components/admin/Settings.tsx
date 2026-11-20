@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { WEEKDAYS, explain, type Ctx, type HoursRow, type RulesRow } from "@/lib/admin/data";
+import { WEEKDAYS, api, explain, type Ctx, type HoursRow, type RulesRow } from "@/lib/admin/data";
 
 export function Settings({ ctx }: { ctx: Ctx }) {
-  const { sb, outlet, canManage, reload } = ctx;
+  const { outlet, canManage, reload } = ctx;
   const [rules, setRules] = useState<RulesRow>(ctx.rules);
   const [hours, setHours] = useState<HoursRow[]>(ctx.hours);
   const [error, setError] = useState("");
@@ -22,30 +22,31 @@ export function Settings({ ctx }: { ctx: Ctx }) {
     required: true,
   });
 
-  const finish = async (error: { code?: string; message: string } | null, done: string) => {
+  const save = async (work: () => Promise<unknown>, done: string) => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await work();
+    } catch (err) {
+      setBusy(false);
+      return setError(explain(err));
+    }
     setBusy(false);
-    if (error) return setError(explain(error));
     setNotice(done);
     await reload();
   };
 
-  const saveRules = async (e: FormEvent) => {
+  const saveRules = (e: FormEvent) => {
     e.preventDefault();
-    setBusy(true);
-    setError("");
-    setNotice("");
     const { outlet_id: _outlet, ...patch } = rules;
-    const { error } = await sb.from("booking_rules").update(patch).eq("outlet_id", outlet.id);
-    finish(error, "Booking rules saved.");
+    save(() => api.patch("/api/admin/rules", patch), "Booking rules saved.");
   };
 
-  const saveHours = async (e: FormEvent) => {
+  const saveHours = (e: FormEvent) => {
     e.preventDefault();
-    setBusy(true);
-    setError("");
-    setNotice("");
-    const { error } = await sb.from("opening_hours").upsert(hours.map((h) => ({ ...h, opens: h.opens.slice(0, 5), closes: h.closes.slice(0, 5) })));
-    finish(error, "Opening hours saved.");
+    const days = hours.map((h) => ({ weekday: h.weekday, opens: h.opens.slice(0, 5), closes: h.closes.slice(0, 5), is_closed: h.is_closed }));
+    save(() => api.put("/api/admin/hours", days), "Opening hours saved.");
   };
 
   const setDay = (weekday: number, patch: Partial<HoursRow>) => setHours((all) => all.map((h) => (h.weekday === weekday ? { ...h, ...patch } : h)));

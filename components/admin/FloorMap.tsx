@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useRef, type PointerEvent } from "react";
 import type { Ctx, TableRow } from "@/lib/admin/data";
 
 export type TableState = { tone: "free" | "booked" | "seated" | "pending" | "off"; note?: string };
@@ -17,26 +17,8 @@ type Props = {
   onMoveEnd?: (id: string) => void;
 };
 
-/** Signed URL for the outlet's uploaded layout image (private storage), or null. */
-export function useFloorImage(ctx: Ctx): string | null {
-  const [url, setUrl] = useState<string | null>(null);
-  const path = ctx.plan.image_path;
-  useEffect(() => {
-    let live = true;
-    if (!path) {
-      setUrl(null);
-      return;
-    }
-    ctx.sb.storage
-      .from("floor-plans")
-      .createSignedUrl(path, 3600)
-      .then(({ data }) => live && setUrl(data?.signedUrl ?? null));
-    return () => {
-      live = false;
-    };
-  }, [ctx.sb, path]);
-  return url;
-}
+/** URL of the outlet's uploaded layout image (Vercel Blob), or null. */
+export const useFloorImage = (ctx: Ctx): string | null => ctx.plan.image_url;
 
 const clamp = (v: number) => Math.min(100, Math.max(0, v));
 
